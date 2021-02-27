@@ -110,7 +110,7 @@ def build_enex(stream, out, note_tags, import_tags, export_date):
             tag = ET.SubElement(note, 'tag')
             tag.text = label_name
 
-        list_content = data.get('listContent', ())
+        list_contents = data.get('listContent', ())
         text_content = data.get('textContent', '').strip()
 
         if not title.text:
@@ -129,9 +129,9 @@ def build_enex(stream, out, note_tags, import_tags, export_date):
         # TODO: (This is not great. Explore flexibility / alternatives.)
         text_content = escape(text_content).replace('\n', '<br />')  # and see below
 
-        if list_content:
+        if list_contents:
             # joplin/enex todo lists are markup in the text content so add these there
-            list_content_text = '\n\n'.join(map(list_item_content, list_content))
+            list_content_text = '\n\n'.join(map(escape, map(list_item_content, list_contents)))  # NOTE: escape
 
             if text_content:
                 text_content += '\n\n---\n\n' + list_content_text
@@ -219,11 +219,11 @@ def build_enex(stream, out, note_tags, import_tags, export_date):
         source_application = ET.SubElement(attributes, 'source-application')
         source_application.text = SOURCE_APPLICATION
 
-        if list_content:
+        if list_contents:
             reminder_order = ET.SubElement(attributes, 'reminder-order')
             reminder_order.text = 'yes'  # trick joplin into treating as todo
 
-            if all(list_item.get('isChecked', False) for list_item in list_content):
+            if all(list_item.get('isChecked', False) for list_item in list_contents):
                 reminder_done = ET.SubElement(attributes, 'reminder-done-time')
                 reminder_done.text = updated.text
 
@@ -307,11 +307,17 @@ def stream_json(paths):
             yield KeepNote(data, path)
 
 
-def filter_stream(stream, only_pinned, ignore_archive, only_tagged):
+def filter_stream(stream, only_pinned, ignore_pinned, only_archived, ignore_archive, only_tagged):
     only_tagged = set(only_tagged) if only_tagged else None
 
     for data in stream:
         if only_pinned and not data.get('isPinned', False):
+            continue
+
+        if ignore_pinned and data.get('isPinned', False):
+            continue
+
+        if only_archived and not data.get('isArchived', False):
             continue
 
         if ignore_archive and data.get('isArchived', False):
@@ -327,13 +333,15 @@ def filter_stream(stream, only_pinned, ignore_archive, only_tagged):
         yield data
 
 
-def convert(paths, dest, only_pinned=False, ignore_archive=False, only_tagged=None,
+def convert(paths, dest, only_pinned=False, ignore_pinned=False,
+            only_archived=False, ignore_archive=False, only_tagged=None,
             tags=(), import_tags=True, max_size=MAX_SIZE):
     start_time = int(time.time())
 
     json_stream = stream_json(paths)
 
-    filtered_stream = filter_stream(json_stream, only_pinned, ignore_archive, only_tagged)
+    filtered_stream = filter_stream(json_stream, only_pinned, ignore_pinned,
+                                    only_archived, ignore_archive, only_tagged)
 
     for (count, json_chunk) in enumerate(batch(filtered_stream, max_size)):
         try:
@@ -414,14 +422,17 @@ def main(argv=None):
     parser.add_argument('--only-tagged', action='append', metavar='NAME',
                         help="only import notes with these tag(s)")
 
-    parser.add_argument('--only-pinned', action='store_true', help="only import pinned notes")
+    pinned_group = parser.add_mutually_exclusive_group()
+    pinned_group.add_argument('--only-pinned', action='store_true',
+                              help="only import pinned notes")
+    pinned_group.add_argument('--none-pinned', action='store_true', dest='ignore_pinned',
+                              help="do not import pinned notes")
 
     archive_group = parser.add_mutually_exclusive_group()
     archive_group.add_argument('--none-in-archive', dest='ignore_archive', action='store_true',
                                help="do not import archived notes")
-    archive_group.add_argument('--only-in-archive', dest='ignore_archive', action='store_false',
+    archive_group.add_argument('--only-in-archive', dest='only_archived', action='store_true',
                                help="only import archived notes")
-    parser.set_defaults(ignore_archive=False)
 
     parser.add_argument('--out', metavar='PATH', default='-', type=output_target,
                         help="path to an output directory or file (default: stdout)")
@@ -440,7 +451,8 @@ def main(argv=None):
     tags = args.tags if (args.do_tag and args.do_extra_tag) else ()
     do_import_tag = args.do_tag and args.do_import_tag
 
-    convert(paths, args.out, args.only_pinned, args.ignore_archive,
+    convert(paths, args.out, args.only_pinned, args.ignore_pinned,
+            args.only_archived, args.ignore_archive,
             args.only_tagged, tags, do_import_tag, args.size)
 
 
